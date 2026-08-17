@@ -1,0 +1,7 @@
+node_modules
+dist
+.env
+.env.local
+
+# Runtime file-backed store data (created on first write)
+server/data/*.json

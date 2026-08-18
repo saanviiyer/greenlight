@@ -140,4 +140,26 @@ describe('request state machine', () => {
       }),
     ).toThrowError(HttpError);
   });
+
+  it('rejects forged times outside windows and times not on the slot cadence', () => {
+    const store = makeStore();
+    const date = new Date(futureSlotStart());
+    date.setUTCHours(3, 0, 0, 0);
+    expect(() => createRequest(store, { name: 'E', email: 'e@example.com', start: date.toISOString(), durationMinutes: 30 })).toThrow(/no longer available/);
+    date.setUTCHours(9, 10, 0, 0);
+    expect(() => createRequest(store, { name: 'E', email: 'e@example.com', start: date.toISOString(), durationMinutes: 30 })).toThrow(/no longer available/);
+  });
+
+  it('rolls approval back when durable persistence fails', () => {
+    class FlakyStore extends MemoryStore {
+      fail = false;
+      protected override persist(): void { if (this.fail) throw new Error('disk full'); }
+    }
+    const store = new FlakyStore({ availability: makeStore().getAvailability() });
+    const request = createRequest(store, { name: 'F', email: 'f@example.com', start: futureSlotStart(), durationMinutes: 30 });
+    store.fail = true;
+    expect(() => approveRequest(store, request.id)).toThrow(/disk full/);
+    expect(store.getRequest(request.id)?.status).toBe('pending');
+    expect(store.listMeetings()).toHaveLength(0);
+  });
 });

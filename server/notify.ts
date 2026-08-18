@@ -14,8 +14,9 @@ export interface Notification {
 }
 
 export function sendNotification(n: Notification): void {
-  // STUB: log the notification. A real implementation would deliver by email.
-  console.log(
-    `[notify] ${n.type} -> ${n.to} | ${n.subject}\n         ${n.body}`,
-  );
+  // Avoid putting request reasons and full addresses into production logs.
+  const [local = '', domain = ''] = n.to.split('@');
+  const recipient = n.to === 'owner' ? 'owner' : `${local.slice(0, 1)}***@${domain}`;
+  const detail = process.env.LOG_NOTIFICATION_BODIES === '1' ? `\n         ${n.body}` : '';
+  console.log(`[notify] ${n.type} -> ${recipient} | ${n.subject}${detail}`);
 }

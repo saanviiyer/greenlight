@@ -3,7 +3,7 @@ import { api } from '../api';
 import type { AppConfig, Slot } from '../types';
 import { dayKey, formatTime, localTimeZone } from '../lib/time';
 
-type Submitted = { id: string; status: string };
+type Submitted = { id: string; status: string; token: string };
 
 export function BookingPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -17,7 +17,11 @@ export function BookingPage() {
   const [email, setEmail] = useState('');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState<Submitted | null>(null);
+  const [submitted, setSubmitted] = useState<Submitted | null>(() => {
+    const query = new URLSearchParams(window.location.search);
+    const id = query.get('request'); const token = query.get('token');
+    return id && token ? { id, token, status: 'pending' } : null;
+  });
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,13 +36,15 @@ export function BookingPage() {
 
   useEffect(() => {
     if (!config) return;
+    let active = true;
     setLoading(true);
     setError(null);
     api
       .slots(duration)
-      .then((r) => setSlots(r.slots))
-      .catch((e) => setError(String(e.message)))
-      .finally(() => setLoading(false));
+      .then((r) => { if (active) setSlots(r.slots); })
+      .catch((e) => { if (active) setError(String(e.message)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [config, duration]);
 
   const grouped = useMemo(() => {
@@ -63,9 +69,14 @@ export function BookingPage() {
         start: selected.start,
         durationMinutes: selected.durationMinutes,
       });
-      setSubmitted({ id: res.id, status: res.status });
+      setSubmitted({ id: res.id, status: res.status, token: res.statusToken });
+      window.history.replaceState({}, '', `/book?request=${encodeURIComponent(res.id)}&token=${encodeURIComponent(res.statusToken)}`);
     } catch (e) {
       setFormError(String((e as Error).message));
+      if ((e as Error).message.includes('no longer available')) {
+        setSelected(null);
+        api.slots(duration).then((result) => setSlots(result.slots)).catch(() => undefined);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -77,6 +88,7 @@ export function BookingPage() {
     setName('');
     setEmail('');
     setNote('');
+    window.history.replaceState({}, '', '/book');
     // refresh slots so a just-requested slot list stays current
     api.slots(duration).then((r) => setSlots(r.slots)).catch(() => {});
   }
@@ -89,13 +101,13 @@ export function BookingPage() {
         </div>
         <h2 className="text-xl font-semibold">Request sent</h2>
         <p className="mt-2 text-slate-600">
-          Your request is pending approval. You will be notified when the owner
-          approves or declines it.
+          Your request is pending approval. Bookmark this private status link
+          and return here to see the owner's decision.
         </p>
         <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">
           Request id: <span className="font-mono text-slate-700">{submitted.id}</span>
         </p>
-        <StatusLookup id={submitted.id} initialStatus={submitted.status} />
+        <StatusLookup id={submitted.id} token={submitted.token} initialStatus={submitted.status} />
         <button
           onClick={reset}
           className="mt-6 rounded-lg bg-brand-600 px-4 py-2 font-medium text-white hover:bg-brand-700"
@@ -157,7 +169,8 @@ export function BookingPage() {
                 {daySlots.map((s) => (
                   <button
                     key={s.start}
-                    onClick={() => setSelected(s)}
+                  onClick={() => setSelected(s)}
+                    aria-pressed={selected?.start === s.start}
                     className={`rounded-md border px-3 py-1.5 text-sm ${
                       selected?.start === s.start
                         ? 'border-brand-600 bg-brand-600 text-white'
@@ -184,13 +197,16 @@ export function BookingPage() {
             <p className="mt-2 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-800">
               {dayKey(selected.start)} at {formatTime(selected.start)} ({selected.durationMinutes} min)
             </p>
-            <div className="mt-4 space-y-3">
+            <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
               <Field label="Name">
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="input"
                   placeholder="Your name"
+                  name="name"
+                  autoComplete="name"
+                  maxLength={120}
                 />
               </Field>
               <Field label="Email">
@@ -199,6 +215,10 @@ export function BookingPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   className="input"
                   placeholder="you@example.com"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  maxLength={254}
                 />
               </Field>
               <Field label="Reason for meeting">
@@ -207,17 +227,19 @@ export function BookingPage() {
                   onChange={(e) => setNote(e.target.value)}
                   className="input h-24 resize-none"
                   placeholder="What would you like to discuss?"
+                  name="note"
+                  maxLength={4000}
                 />
               </Field>
               {formError && <p className="text-sm text-red-600">{formError}</p>}
               <button
-                onClick={submit}
+                type="submit"
                 disabled={submitting || !name || !email}
                 className="w-full rounded-lg bg-brand-600 px-4 py-2 font-medium text-white hover:bg-brand-700 disabled:opacity-50"
               >
                 {submitting ? 'Sending...' : 'Send request'}
               </button>
-            </div>
+            </form>
           </>
         )}
       </aside>
@@ -234,21 +256,32 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function StatusLookup({ id, initialStatus }: { id: string; initialStatus: string }) {
+function StatusLookup({ id, token, initialStatus }: { id: string; token: string; initialStatus: string }) {
   const [status, setStatus] = useState(initialStatus);
   const [message, setMessage] = useState<string | undefined>();
   const [checking, setChecking] = useState(false);
+  const [error, setError] = useState('');
 
   async function check() {
     setChecking(true);
     try {
-      const r = await api.requestStatus(id);
+      const r = await api.requestStatus(id, token);
       setStatus(r.status);
       setMessage(r.decisionMessage);
+      setError('');
+    } catch (cause) {
+      setError((cause as Error).message);
     } finally {
       setChecking(false);
     }
   }
+
+  useEffect(() => {
+    void check();
+    if (status !== 'pending') return;
+    const timer = window.setInterval(() => void check(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [id, token, status]);
 
   const color =
     status === 'approved'
@@ -263,6 +296,7 @@ function StatusLookup({ id, initialStatus }: { id: string; initialStatus: string
         Status: <span className={`font-semibold ${color}`}>{status}</span>
       </p>
       {message && <p className="mt-1 text-slate-500">Message: {message}</p>}
+      {error && <p className="mt-1 text-red-600" role="alert">{error}</p>}
       <button
         onClick={check}
         className="mt-2 text-brand-700 underline hover:text-brand-800"

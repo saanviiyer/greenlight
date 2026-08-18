@@ -14,8 +14,11 @@ Both live in one app, on two routes.
 
 - Shows the owner's open slots, generated from the availability rules minus already-confirmed meetings and blackout dates.
 - Slots are computed in the owner's timezone and shown in the visitor's local time.
-- The visitor picks a slot and submits a request with name, email, reason, and duration.
-- This creates a **pending** request and shows a confirmation with a request id and a live status link.
+- The visitor picks a server-issued slot and submits a request with name, email,
+  reason, and duration. The server recomputes availability before accepting it;
+  forged, stale, blackout, off-cadence, insufficient-notice, and out-of-horizon
+  times are rejected.
+- This creates a **pending** request and a private, tokenized live status link.
 
 ### 2. Owner dashboard (`/dashboard`)
 
@@ -33,7 +36,9 @@ Lightly protected by an owner passphrase from `OWNER_KEY` (open in development w
 4. Slot generation now excludes that meeting (plus its buffer), so it disappears from the booking page and cannot be double-booked.
 5. Approving a second request that now conflicts is rejected with a clear error. Declining records a reason and leaves the slot open.
 
-The request state machine is `pending -> approved` or `pending -> declined`. A decided request cannot be decided again.
+The request state machine is `pending -> approved` or `pending -> declined`. A
+decided request cannot be decided again. Approval creates the meeting and marks
+the request approved in one durable transaction; a write failure rolls both back.
 
 ## Smarter features
 
@@ -66,7 +71,10 @@ npm start       # serves the built client and the /api routes from one Node proc
 npm test
 ```
 
-Vitest covers the pure logic: slot generation (timezone, duration, buffer), double-book prevention on approval, the request state machine, and natural-language availability parsing.
+Vitest covers slot generation, spring-forward gaps, repeated fall-back hours,
+duration/buffer rules, availability validation, forged-slot rejection, durable
+rollback, owner/status authorization, concurrent approval, the request state
+machine, and natural-language parsing.
 
 ## Configuration
 
@@ -75,27 +83,55 @@ Copy `.env.example` to `.env`:
 - `ANTHROPIC_API_KEY` - enables live AI triage and availability parsing. When unset, the app runs in mock mode.
 - `OWNER_KEY` - passphrase that protects the dashboard and owner-only API routes. When unset, the dashboard is open (development). Set it before deploying.
 - `PORT` - server port (defaults to 8787).
+- `MIN_NOTICE_MINUTES` - minimum lead time for a request (default 60).
+- `BOOKING_HORIZON_DAYS` - how far ahead visitors may request (default 14).
+- `DATA_DIR` - durable store directory; use a mounted disk in production.
+- `ANTHROPIC_MODEL` / `UPSTREAM_TIMEOUT_MS` - optional AI model and timeout.
+
+Production refuses to start unless `OWNER_KEY` is at least 12 characters. The
+client keeps it in tab-scoped `sessionStorage` and sends it as a Bearer token;
+locking the dashboard or closing the tab clears access.
 
 ## Persistence
 
-Data (availability, requests, meetings) is stored through a repository abstraction (`Store` in `server/store.ts`). The default implementation is `FileStore`, a file-backed JSON store under `server/data/store.json`, so everything survives restarts. Tests use `MemoryStore`, which implements the same interface.
+Data (availability, requests, meetings) is stored through a repository
+abstraction (`Store` in `server/store.ts`). `FileStore` writes an atomic JSON
+snapshot with mode `0600` and preserves the previous version as `store.json.bak`.
+It fails closed on corrupt data instead of silently erasing it. Set `DATA_DIR`
+to durable storage; the Render blueprint mounts `/var/data`. Tests use
+`MemoryStore`, which implements the same transaction contract.
 
 ## Notifications
 
-In-app status is the source of truth. Email is **stubbed**: `server/notify.ts` logs every notification and exposes a `sendNotification` hook. Real delivery needs an SMTP or transactional-email provider and is out of scope for this MVP.
+The private status link is the source of truth and automatically checks for a
+decision. Email is still a provider hook: `server/notify.ts` records redacted
+notification metadata without logging request reasons or full addresses. Real
+delivery needs SMTP or a transactional-email provider; the UI does not promise
+email delivery while that provider is absent.
 
 ## Deploying
 
 - `Dockerfile` and `.dockerignore` build and run the production server.
-- `render.yaml` defines a Render web service with `ANTHROPIC_API_KEY` and `OWNER_KEY` as `sync: false` secrets.
+- `Dockerfile` is a multi-stage build with production-only runtime dependencies.
+- `render.yaml` defines a Render web service, persistent disk, scheduling policy,
+  proxy configuration, and secrets.
+
+The API uses same-origin browser access, strict body/input limits, CSP and other
+security headers, production-safe errors, constant-time owner/token comparison,
+and separate throttles for general traffic, bookings, status polling, owner
+authentication, and AI triage.
 
 ## Scope and upgrade path
 
-This is a **single-owner MVP**. To take it further:
+Greenlight is deployable as a durable single-owner service. The remaining
+external-service upgrades are:
 
-- **Persistence**: swap `FileStore` for a Supabase or Postgres implementation of the `Store` interface. Because the service and HTTP layers only depend on the interface, no business logic changes.
+- **Multi-instance persistence**: swap `FileStore` for Postgres and enforce the
+  non-overlap invariant in a serializable transaction/exclusion constraint.
+  Run only one application instance while using `FileStore`.
 - **Auth**: replace the single `OWNER_KEY` passphrase with real authentication (for example Supabase Auth or another identity provider), and scope data per owner.
-- **Email**: implement `sendNotification` against an email provider (SMTP, Resend, Postmark, SES) so requesters and the owner get real notifications.
+- **Email/calendar**: implement the notification hook with SMTP/Resend/Postmark/
+  SES and attach calendar invitations after successful delivery.
 - **Multi-owner**: add an owner/organization dimension to availability, requests, and meetings, and route the public booking page per owner (for example `/book/:ownerSlug`).
 
 ## Project layout

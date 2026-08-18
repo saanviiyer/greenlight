@@ -11,15 +11,15 @@ import type {
 const KEY_STORAGE = 'greenlight_owner_key';
 
 export function getOwnerKey(): string {
-  return localStorage.getItem(KEY_STORAGE) ?? '';
+  return sessionStorage.getItem(KEY_STORAGE) ?? '';
 }
 
 export function setOwnerKey(key: string): void {
-  localStorage.setItem(KEY_STORAGE, key);
+  sessionStorage.setItem(KEY_STORAGE, key);
 }
 
 export function clearOwnerKey(): void {
-  localStorage.removeItem(KEY_STORAGE);
+  sessionStorage.removeItem(KEY_STORAGE);
 }
 
 async function req<T>(
@@ -27,19 +27,26 @@ async function req<T>(
   url: string,
   body?: unknown,
   owner = false,
+  explicitOwnerKey?: string,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (owner) headers['x-owner-key'] = getOwnerKey();
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  if (owner) headers.Authorization = `Bearer ${explicitOwnerKey ?? getOwnerKey()}`;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 30_000);
+  let res: Response;
+  try {
+    res = await fetch(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: controller.signal });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') throw new Error('The request timed out. Please try again.');
+    throw new Error('Could not reach Greenlight. Check your connection and try again.');
+  } finally { window.clearTimeout(timer); }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
+  let data: { error?: string } = {};
+  try { data = text ? JSON.parse(text) as { error?: string } : {}; }
+  catch { if (res.ok) throw new Error('The server returned an invalid response.'); }
   if (!res.ok) {
-    throw new Error((data && data.error) || `Request failed (${res.status})`);
+    throw new Error(data.error || `Request failed (${res.status})`);
   }
   return data as T;
 }
@@ -57,20 +64,20 @@ export const api = {
     start: string;
     durationMinutes: number;
   }) =>
-    req<{ id: string; status: string; request: MeetingRequest }>(
+    req<{ id: string; status: string; statusToken: string }>(
       'POST',
       '/api/requests',
       input,
     ),
-  requestStatus: (id: string) =>
+  requestStatus: (id: string, token: string) =>
     req<{ id: string; status: string; decisionMessage?: string }>(
       'GET',
-      `/api/requests/${id}`,
+      `/api/requests/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
     ),
 
   // Owner
   verifyOwner: (key: string) =>
-    req<{ ok: boolean }>('POST', '/api/owner/verify', { key }),
+    req<{ ok: boolean }>('POST', '/api/owner/verify', {}, true, key),
   availability: () => req<Availability>('GET', '/api/availability', undefined, true),
   saveAvailability: (a: Availability) =>
     req<Availability>('PUT', '/api/availability', a, true),

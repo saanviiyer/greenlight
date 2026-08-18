@@ -18,6 +18,7 @@ export type RequestStatus = 'pending' | 'approved' | 'declined';
 
 export interface MeetingRequest {
   id: string;
+  statusToken: string; // opaque bearer token for the public status page
   name: string;
   email: string;
   note: string;

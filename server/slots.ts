@@ -76,11 +76,17 @@ export function generateSlots(input: GenerateSlotsInput): Slot[] {
       for (let m = winStart; m + duration <= winEnd; m += step) {
         const hour = Math.floor(m / 60);
         const minute = m % 60;
-        const slotStart = zonedWallTimeToUtc(y, mo, d, hour, minute, tz);
+        let slotStart: Date;
+        try {
+          slotStart = zonedWallTimeToUtc(y, mo, d, hour, minute, tz);
+        } catch (error) {
+          if (error instanceof RangeError) continue; // DST spring-forward gap
+          throw error;
+        }
         const slotEnd = new Date(slotStart.getTime() + duration * 60_000);
         if (slotStart.getTime() <= now.getTime()) continue;
         if (slotStart.getTime() < from.getTime()) continue;
-        if (slotStart.getTime() > to.getTime()) continue;
+        if (slotEnd.getTime() > to.getTime()) continue;
         if (
           conflictsWithMeetings(
             slotStart,

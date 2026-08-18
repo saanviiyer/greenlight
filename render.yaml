@@ -12,3 +12,15 @@ services:
         sync: false
       - key: OWNER_KEY
         sync: false
+      - key: DATA_DIR
+        value: /var/data
+      - key: TRUST_PROXY
+        value: "1"
+      - key: MIN_NOTICE_MINUTES
+        value: "60"
+      - key: BOOKING_HORIZON_DAYS
+        value: "14"
+    disk:
+      name: greenlight-data
+      mountPath: /var/data
+      sizeGB: 1

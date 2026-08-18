@@ -7,7 +7,11 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { MeetingRequest, TriageResult, WeeklyWindow } from './types.js';
 import { parseAvailabilityText } from './nlAvailability.js';
 
-const MODEL = 'claude-sonnet-5';
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
+
+function client(): Anthropic {
+  return new Anthropic({ timeout: Number(process.env.UPSTREAM_TIMEOUT_MS) || 30_000, maxRetries: 2 });
+}
 
 export function aiEnabled(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY);
@@ -82,7 +86,7 @@ export async function triageRequests(
   if (!aiEnabled()) return { results: mockTriage(requests), mode: 'mock' };
 
   try {
-    const client = new Anthropic();
+    const anthropic = client();
     const payload = requests.map((r) => ({
       id: r.id,
       name: r.name,
@@ -103,7 +107,7 @@ For each request return an object with:
 Return ONLY a JSON array, sorted highest priority first. Requests:
 ${JSON.stringify(payload, null, 2)}`;
 
-    const msg = await client.messages.create({
+    const msg = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
@@ -120,11 +124,11 @@ ${JSON.stringify(payload, null, 2)}`;
         const base = mockTriageOne(byId.get(p.id as string)!);
         return {
           id: p.id as string,
-          priority: (p.priority as TriageResult['priority']) || base.priority,
-          summary: p.summary || base.summary,
-          flags: Array.isArray(p.flags) ? p.flags : base.flags,
-          draftApprove: p.draftApprove || base.draftApprove,
-          draftDecline: p.draftDecline || base.draftDecline,
+          priority: p.priority && ['high', 'medium', 'low'].includes(p.priority) ? p.priority : base.priority,
+          summary: typeof p.summary === 'string' ? p.summary.slice(0, 500) : base.summary,
+          flags: Array.isArray(p.flags) ? p.flags.slice(0, 10).map(String).map((value) => value.slice(0, 80)) : base.flags,
+          draftApprove: typeof p.draftApprove === 'string' ? p.draftApprove.slice(0, 2_000) : base.draftApprove,
+          draftDecline: typeof p.draftDecline === 'string' ? p.draftDecline.slice(0, 2_000) : base.draftDecline,
         };
       });
     // Make sure every request is represented even if the model dropped one.
@@ -147,7 +151,7 @@ export async function parseAvailability(
   if (!aiEnabled()) return { ...fallback, mode: 'rule' };
 
   try {
-    const client = new Anthropic();
+    const anthropic = client();
     const prompt = `Convert this availability description into weekly recurring windows.
 Return ONLY a JSON array of objects with:
 - day: integer 0-6 where 0 is Sunday and 6 is Saturday
@@ -155,7 +159,7 @@ Return ONLY a JSON array of objects with:
 - end: "HH:MM" 24-hour local time
 
 Description: "${text}"`;
-    const msg = await client.messages.create({
+    const msg = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],

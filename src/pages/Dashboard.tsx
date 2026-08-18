@@ -87,12 +87,12 @@ function OwnerGate({ onAuthed }: { onAuthed: () => void }) {
     setChecking(true);
     setError(null);
     try {
-      setOwnerKey(key);
       const r = await api.verifyOwner(key);
-      if (r.ok) onAuthed();
+      if (r.ok) { setOwnerKey(key); onAuthed(); }
       else setError('Incorrect passphrase.');
     } catch (e) {
       setError(String((e as Error).message));
+      clearOwnerKey();
     } finally {
       setChecking(false);
     }
@@ -111,6 +111,8 @@ function OwnerGate({ onAuthed }: { onAuthed: () => void }) {
         onKeyDown={(e) => e.key === 'Enter' && submit()}
         className="input mt-4"
         placeholder="Passphrase"
+        autoComplete="current-password"
+        aria-label="Owner passphrase"
       />
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       <button
@@ -227,6 +229,7 @@ function RequestCard({
   const [error, setError] = useState<string | null>(null);
 
   async function act(kind: 'approve' | 'decline') {
+    if (kind === 'decline' && !confirm(`Decline ${request.name}'s request? This cannot be undone.`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -357,6 +360,7 @@ function UpcomingTab() {
   useEffect(load, []);
 
   async function cancel(id: string) {
+    if (!confirm('Cancel this confirmed meeting? The time will become available again.')) return;
     try {
       await api.cancel(id);
       load();

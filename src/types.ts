@@ -16,6 +16,7 @@ export type RequestStatus = 'pending' | 'approved' | 'declined';
 
 export interface MeetingRequest {
   id: string;
+  statusToken: string;
   name: string;
   email: string;
   note: string;
@@ -61,4 +62,6 @@ export interface AppConfig {
   ownerProtected: boolean;
   timezone: string;
   durations: number[];
+  bookingHorizonDays: number;
+  minNoticeMinutes: number;
 }

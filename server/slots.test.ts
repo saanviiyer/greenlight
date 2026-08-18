@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { conflictsWithMeetings, generateSlots, intervalsOverlap } from './slots.js';
+import { zonedWallTimeToUtc } from './time.js';
 import type { Availability, Meeting } from './types.js';
 
 // Use a fixed UTC-based availability so slot counts are deterministic
@@ -113,6 +114,18 @@ describe('generateSlots', () => {
     });
     // 09:00 Phoenix (UTC-7) == 16:00 UTC.
     expect(slots[0].start).toBe('2026-08-17T16:00:00.000Z');
+  });
+
+  it('skips nonexistent spring-forward times and resolves repeated fall-back times once', () => {
+    const sunday: Availability = { ...utcAvailability, timezone: 'America/Los_Angeles', weeklyWindows: [{ day: 0, start: '01:00', end: '04:00' }], durations: [60], bufferMinutes: 0 };
+    const spring = generateSlots({ availability: sunday, duration: 60, from: new Date('2026-03-08T00:00:00Z'), to: new Date('2026-03-09T00:00:00Z'), meetings: [], now: PAST_NOW });
+    expect(spring.map((slot) => slot.start)).toEqual(['2026-03-08T09:00:00.000Z', '2026-03-08T10:00:00.000Z']);
+    const fall = generateSlots({ availability: { ...sunday, weeklyWindows: [{ day: 0, start: '01:00', end: '03:00' }] }, duration: 60, from: new Date('2026-11-01T00:00:00Z'), to: new Date('2026-11-02T00:00:00Z'), meetings: [], now: PAST_NOW });
+    expect(fall.map((slot) => slot.start)).toEqual(['2026-11-01T08:00:00.000Z', '2026-11-01T10:00:00.000Z']);
+  });
+
+  it('rejects a wall time that does not exist during spring-forward', () => {
+    expect(() => zonedWallTimeToUtc(2026, 3, 8, 2, 30, 'America/Los_Angeles')).toThrow(/does not exist/);
   });
 });
 

@@ -1,155 +1,133 @@
 # Greenlight
 
-A smarter Calendly. Visitors **request** a time slot and the owner must **approve** it before the meeting is confirmed. Unlike Calendly, nothing auto-confirms. The smarter layer adds AI request triage, natural-language availability, and pure double-book prevention.
+Greenlight is a scheduling app. Visitors request a time slot, and the owner must approve the request before the meeting is confirmed. Nothing confirms automatically. The app also has AI request triage, natural-language availability and double-book prevention.
 
-## Why it is different
+## How it works
 
-Calendly hands out a link and auto-confirms whatever a visitor picks. Greenlight puts the owner in control: every booking starts as a **pending request** the owner reviews, and only an approval turns it into a confirmed meeting (and removes that time from availability so it cannot be double-booked).
+Calendly confirms whatever time a visitor picks. In Greenlight, every booking starts as a pending request. Only the owner's approval turns it into a confirmed meeting. The approval also removes that time from availability, so nobody can book it twice.
 
-## The two surfaces
+The app has two routes.
 
-Both live in one app, on two routes.
+### Public booking page (`/book`)
 
-### 1. Public booking page (`/book`)
+- The page shows open slots. The server makes them from the availability rules. It removes confirmed meetings and blackout dates.
+- The server computes slots in the owner's timezone. The page shows them in the visitor's local time.
+- The visitor picks a slot from the server and sends a request with name, email, reason and duration. The server computes availability again before it accepts the request. It rejects forged times, stale times, blackout times, off-cadence times, times with too little notice and times past the booking horizon.
+- The request starts as pending. The visitor gets a private, tokenized status link.
 
-- Shows the owner's open slots, generated from the availability rules minus already-confirmed meetings and blackout dates.
-- Slots are computed in the owner's timezone and shown in the visitor's local time.
-- The visitor picks a server-issued slot and submits a request with name, email,
-  reason, and duration. The server recomputes availability before accepting it;
-  forged, stale, blackout, off-cadence, insufficient-notice, and out-of-horizon
-  times are rejected.
-- This creates a **pending** request and a private, tokenized live status link.
+### Owner dashboard (`/dashboard`)
 
-### 2. Owner dashboard (`/dashboard`)
+An owner passphrase from `OWNER_KEY` protects the dashboard. When `OWNER_KEY` is unset in development, the dashboard is open.
 
-Lightly protected by an owner passphrase from `OWNER_KEY` (open in development when unset).
+- Pending requests. The owner approves or declines each one, with an optional message. A decline records a reason.
+- Upcoming meetings. The owner can cancel a confirmed meeting.
+- Availability settings. Weekly windows, meeting durations, buffer between meetings, timezone and blackout dates.
 
-- **Pending requests queue**: Approve or Decline each, with an optional message. Approving confirms the meeting and removes that time from availability. Declining records a reason.
-- **Upcoming meetings**: confirmed meetings with a cancel action.
-- **Availability settings**: weekly recurring windows, meeting durations, buffer between meetings, timezone, and blackout dates.
+### Request flow
 
-## The request to approve flow
+1. A visitor requests an open slot. The request has status `pending`.
+2. The slot stays open while the request is pending. More than one person can request the same time.
+3. The owner approves a request. The server creates a confirmed meeting and sets the request to `approved`.
+4. Slot generation now excludes that meeting and its buffer. The slot leaves the booking page.
+5. If the owner approves a second request that now conflicts, the server rejects it with a clear error. A decline records a reason and keeps the slot open.
 
-1. Visitor submits a request on an open slot -> request is created with status `pending`.
-2. The slot stays offered while pending (several people can request the same time).
-3. Owner approves a request -> a confirmed meeting is created and the request becomes `approved`.
-4. Slot generation now excludes that meeting (plus its buffer), so it disappears from the booking page and cannot be double-booked.
-5. Approving a second request that now conflicts is rejected with a clear error. Declining records a reason and leaves the slot open.
+A request goes from `pending` to `approved` or from `pending` to `declined`. The owner cannot decide a request twice. Approval creates the meeting and marks the request in one durable transaction. If the write fails, both changes roll back.
 
-The request state machine is `pending -> approved` or `pending -> declined`. A
-decided request cannot be decided again. Approval creates the meeting and marks
-the request approved in one durable transaction; a write failure rolls both back.
+### AI and smart features
 
-## Smarter features
+- AI triage. The app summarizes and ranks the pending queue by reason. It flags vague requests and drafts approve and decline messages that the owner can edit. It uses Claude when `ANTHROPIC_API_KEY` is set. Otherwise a deterministic mock runs.
+- Natural-language availability. You type text like "weekday afternoons 2 to 5" and the app turns it into weekly windows. It uses Claude when a key is set. Otherwise a rule-based parser runs.
+- Double-book prevention. Slot generation and conflict logic are pure functions with unit tests (`server/slots.ts`).
 
-- **AI smart triage**: summarizes and prioritizes the pending queue (ranking by the reason, flagging vague or low-context requests) and drafts approve and decline messages the owner can edit. Runs on Claude when `ANTHROPIC_API_KEY` is set, with a deterministic mock fallback when it is not.
-- **Natural-language availability**: type something like "weekday afternoons 2 to 5" and it parses into weekly windows. Uses Claude when a key is present, with a rule-based parser as the fallback so it works with no key.
-- **Double-book prevention**: pure, unit-tested slot generation and conflict logic (`server/slots.ts`).
+## Run it
 
-## Running locally
-
-No keys are required. AI runs in mock mode and the store is written to disk.
+You need no keys. AI runs in mock mode and the store is written to disk.
 
 ```bash
+git clone https://github.com/saanviiyer/greenlight
+cd greenlight
 npm install
 npm run dev
 ```
 
-- Client: http://localhost:5173 (Vite dev server, proxies `/api` to the server)
+- Client: http://localhost:5173 (Vite, sends `/api` to the server)
 - Server: http://localhost:8787
 
-### Build and production
-
-```bash
-npm run build   # type-checks client and server, then builds the client (zero TS errors)
-npm start       # serves the built client and the /api routes from one Node process
-```
-
-### Tests
+Tests:
 
 ```bash
 npm test
 ```
 
-Vitest covers slot generation, spring-forward gaps, repeated fall-back hours,
-duration/buffer rules, availability validation, forged-slot rejection, durable
-rollback, owner/status authorization, concurrent approval, the request state
-machine, and natural-language parsing.
+The Vitest suites cover slot generation, spring-forward gaps, repeated fall-back hours and duration and buffer rules. They also cover availability validation, forged-slot rejection, durable rollback, owner and status authorization, concurrent approval, the request state machine and natural-language parsing.
 
-## Configuration
+Production:
 
-Copy `.env.example` to `.env`:
+```bash
+npm run build   # type-checks client and server, then builds the client
+npm start       # one Node process serves the client and /api
+```
 
-- `ANTHROPIC_API_KEY` - enables live AI triage and availability parsing. When unset, the app runs in mock mode.
-- `OWNER_KEY` - passphrase that protects the dashboard and owner-only API routes. When unset, the dashboard is open (development). Set it before deploying.
-- `PORT` - server port (defaults to 8787).
-- `MIN_NOTICE_MINUTES` - minimum lead time for a request (default 60).
-- `BOOKING_HORIZON_DAYS` - how far ahead visitors may request (default 14).
-- `DATA_DIR` - durable store directory; use a mounted disk in production.
-- `ANTHROPIC_MODEL` / `UPSTREAM_TIMEOUT_MS` - optional AI model and timeout.
+### Deploy
 
-Production refuses to start unless `OWNER_KEY` is at least 12 characters. The
-client keeps it in tab-scoped `sessionStorage` and sends it as a Bearer token;
-locking the dashboard or closing the tab clears access.
+The `Dockerfile` is a multi-stage build with production-only runtime dependencies. `render.yaml` defines a Render web service with a persistent disk at `/var/data`, the scheduling policy, the proxy setting and the secrets.
+
+In production, the server does not start unless `OWNER_KEY` has at least 12 characters. The client keeps the key in tab-scoped `sessionStorage` and sends it as a Bearer token. Locking the dashboard or closing the tab removes access.
+
+The API allows same-origin browser access only. It has strict body and input limits, CSP and other security headers, safe production errors and constant-time comparison for owner keys and tokens. It has separate throttles for general traffic, bookings, status polling, owner login and AI triage.
+
+## Environment variables
+
+Copy `.env.example` to `.env`.
+
+| Name | Purpose | Required |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | Live AI triage and availability parsing. Without it, the app runs in mock mode. | Optional |
+| `ANTHROPIC_MODEL` | AI model. Default is `claude-sonnet-5`. | Optional |
+| `UPSTREAM_TIMEOUT_MS` | AI request timeout. Default is 30000. | Optional |
+| `OWNER_KEY` | Passphrase for the dashboard and owner-only API routes. Open when unset in development. | Required in production (12+ characters) |
+| `MIN_NOTICE_MINUTES` | Minimum lead time for a request. Default is 60. | Optional |
+| `BOOKING_HORIZON_DAYS` | How far ahead visitors can book. Default is 14. | Optional |
+| `DATA_DIR` | Store directory. Use a mounted disk in production. Default is `server/data`. | Optional |
+| `TRUST_PROXY` | Set to 1 only behind one trusted reverse proxy. | Optional |
+| `PORT` | Server port. Default is 8787. | Optional |
+| `LOG_NOTIFICATION_BODIES` | Set to 1 to log notification bodies. | Optional |
 
 ## Persistence
 
-Data (availability, requests, meetings) is stored through a repository
-abstraction (`Store` in `server/store.ts`). `FileStore` writes an atomic JSON
-snapshot with mode `0600` and preserves the previous version as `store.json.bak`.
-It fails closed on corrupt data instead of silently erasing it. Set `DATA_DIR`
-to durable storage; the Render blueprint mounts `/var/data`. Tests use
-`MemoryStore`, which implements the same transaction contract.
+All data (availability, requests, meetings) goes through the `Store` interface in `server/store.ts`. `FileStore` writes an atomic JSON snapshot with mode `0600` and keeps the previous version as `store.json.bak`. If the data is corrupt, it stops with an error and does not erase the data. Tests use `MemoryStore`, which has the same transaction contract.
 
 ## Notifications
 
-The private status link is the source of truth and automatically checks for a
-decision. Email is still a provider hook: `server/notify.ts` records redacted
-notification metadata without logging request reasons or full addresses. Real
-delivery needs SMTP or a transactional-email provider; the UI does not promise
-email delivery while that provider is absent.
+The private status link is the source of truth. It checks for a decision automatically. Email is only a hook. `server/notify.ts` logs redacted notification metadata and does not log request reasons or full addresses. Real delivery needs SMTP or a transactional-email provider. Until then, the UI does not promise email delivery.
 
-## Deploying
+## Limits and next steps
 
-- `Dockerfile` and `.dockerignore` build and run the production server.
-- `Dockerfile` is a multi-stage build with production-only runtime dependencies.
-- `render.yaml` defines a Render web service, persistent disk, scheduling policy,
-  proxy configuration, and secrets.
+Greenlight runs as a durable service for one owner. These upgrades need external services:
 
-The API uses same-origin browser access, strict body/input limits, CSP and other
-security headers, production-safe errors, constant-time owner/token comparison,
-and separate throttles for general traffic, bookings, status polling, owner
-authentication, and AI triage.
+- Multi-instance persistence. Replace `FileStore` with Postgres and enforce the non-overlap rule in a serializable transaction or an exclusion constraint. With `FileStore`, run only one instance.
+- Auth. Replace the single `OWNER_KEY` with real authentication (for example Supabase Auth) and scope data per owner.
+- Email and calendar. Implement the notification hook with SMTP, Resend, Postmark or SES. Attach calendar invitations after delivery succeeds.
+- Multi-owner. Add an owner or organization field to availability, requests and meetings. Route the booking page per owner (for example `/book/:ownerSlug`).
 
-## Scope and upgrade path
-
-Greenlight is deployable as a durable single-owner service. The remaining
-external-service upgrades are:
-
-- **Multi-instance persistence**: swap `FileStore` for Postgres and enforce the
-  non-overlap invariant in a serializable transaction/exclusion constraint.
-  Run only one application instance while using `FileStore`.
-- **Auth**: replace the single `OWNER_KEY` passphrase with real authentication (for example Supabase Auth or another identity provider), and scope data per owner.
-- **Email/calendar**: implement the notification hook with SMTP/Resend/Postmark/
-  SES and attach calendar invitations after successful delivery.
-- **Multi-owner**: add an owner/organization dimension to availability, requests, and meetings, and route the public booking page per owner (for example `/book/:ownerSlug`).
-
-## Project layout
+## Layout
 
 ```
 server/
-  index.ts          Express app: /api routes + static client in production
-  service.ts        Business logic: request state machine, double-book prevention
-  slots.ts          Pure slot generation and conflict logic (unit tested)
-  nlAvailability.ts Rule-based natural-language parser (unit tested)
-  ai.ts             Claude triage + availability parsing, with mock fallback
-  store.ts          Store interface, FileStore (JSON on disk), MemoryStore (tests)
-  notify.ts         Stubbed email notification hook
-  time.ts           Timezone helpers (Intl based)
+  index.ts          Express app, /api routes, static client in production
+  service.ts        request state machine, double-book prevention
+  slots.ts          pure slot generation and conflict logic (tested)
+  nlAvailability.ts rule-based natural-language parser (tested)
+  ai.ts             Claude triage and availability parsing, mock fallback
+  store.ts          Store interface, FileStore, MemoryStore
+  notify.ts         email notification hook (stub)
+  security.ts       security helpers
+  validate.ts       input validation
+  time.ts           timezone helpers (Intl)
   *.test.ts         Vitest suites
 src/
-  App.tsx           Router and shell
+  App.tsx           router and shell
   pages/            BookingPage, Dashboard
-  api.ts            Typed fetch client
-  lib/time.ts       Client formatting helpers
+  api.ts            typed fetch client
+  lib/time.ts       client formatting helpers
 ```
